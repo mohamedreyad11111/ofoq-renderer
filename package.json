@@ -1,0 +1,15 @@
+{
+  "name": "ofoq-renderer",
+  "version": "1.0.0",
+  "description": "Ofoq Studio headless render runner",
+  "main": "render-job.js",
+  "scripts": {
+    "render": "node render-job.js"
+  },
+  "dependencies": {
+    "playwright": "^1.44.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
