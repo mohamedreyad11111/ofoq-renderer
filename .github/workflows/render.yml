@@ -1,0 +1,59 @@
+name: Ofoq Render Job
+
+on:
+  workflow_dispatch:
+    inputs:
+      render_url:
+        description: 'Full /render/JOB_ID URL'
+        required: true
+      job_id:
+        description: 'Firestore render_jobs document ID'
+        required: true
+      password:
+        description: 'Render job password (leave empty if none)'
+        required: false
+        default: ''
+      scene_name:
+        description: 'Scene name for the output filename'
+        required: false
+        default: 'render'
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+
+      - name: Run render job
+        run: |
+          node render-job.js \
+            --url "${{ inputs.render_url }}" \
+            --password "${{ inputs.password }}" \
+            --output "./output/${{ inputs.job_id }}.mp4" \
+            --job-id "${{ inputs.job_id }}" \
+            --scene-name "${{ inputs.scene_name }}" \
+            --release-tag "ofoq-renders" \
+            --timeout 1500
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
