@@ -262,8 +262,9 @@ async function main() {
   await firestoreUpdate('running', null);
 
   // Launch Chromium
-  log('Launching Chromium...', 'info');
+  log('Launching Google Chrome...', 'info');
   var browser = await playwright.chromium.launch({
+    channel: 'chrome',
     headless: HEADLESS,
     args: [
       '--no-sandbox',
@@ -277,7 +278,7 @@ async function main() {
       '--js-flags=--max-old-space-size=4096'
     ]
   });
-  log('Chromium ready', 'ok');
+  log('Chrome ready', 'ok');
 
   var context = await browser.newContext({ acceptDownloads: true });
   context.setDefaultTimeout(TIMEOUT_SEC * 1000);
