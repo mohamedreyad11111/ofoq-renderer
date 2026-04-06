@@ -38,7 +38,15 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: C:\Users\runneradmin\AppData\Local\ms-playwright
+          key: playwright-chrome-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       - name: Install Playwright + Google Chrome
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install chrome --with-deps
 
       - name: Run render job
