@@ -3,7 +3,6 @@ var playwright = require('playwright');
 var path       = require('path');
 var fs         = require('fs');
 var os         = require('os');
-var cp         = require('child_process');
 
 function parseArgs(argv) {
   var args = {};
@@ -22,6 +21,7 @@ var args = parseArgs(process.argv);
 
 if (!args.url) {
   console.log('  ERROR: --url is required');
+  console.log('  node render-job.js --url https://reyad.web.app/render/JOB_ID');
   process.exit(1);
 }
 
@@ -62,7 +62,7 @@ function ensureDir(dir) {
 }
 
 // ---------------------------------------------------------------------------
-// Firebase JWT auth
+// Firebase JWT auth (no SDK)
 // ---------------------------------------------------------------------------
 async function getFirebaseToken(saJson) {
   var sa = typeof saJson === 'string' ? JSON.parse(saJson) : saJson;
@@ -85,12 +85,15 @@ async function getFirebaseToken(saJson) {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=' + jwt
   });
-  if (!r.ok) throw new Error('Token: ' + (await r.text()).slice(0, 200));
+  if (!r.ok) throw new Error('Token exchange: ' + (await r.text()).slice(0, 200));
   return (await r.json()).access_token;
 }
 
 async function firestoreUpdate(status, extra) {
-  if (!FB_SA_JSON || !FB_PROJECT || !JOB_ID) return;
+  if (!FB_SA_JSON || !FB_PROJECT || !JOB_ID) {
+    log('Firestore skipped (no credentials)', 'warn');
+    return;
+  }
   try {
     var token  = await getFirebaseToken(FB_SA_JSON);
     var fields = { status: { stringValue: status } };
@@ -111,7 +114,7 @@ async function firestoreUpdate(status, extra) {
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
       body: JSON.stringify({ fields: fields })
     });
-    log('Firestore: status=' + status + (r.ok ? '' : ' [FAILED: ' + r.status + ']'), r.ok ? 'ok' : 'warn');
+    log('Firestore: status=' + status + (r.ok ? '' : ' [FAILED ' + r.status + ']'), r.ok ? 'ok' : 'warn');
   } catch(e) { log('Firestore error: ' + e.message, 'warn'); }
 }
 
@@ -119,8 +122,12 @@ async function firestoreUpdate(status, extra) {
 // GitHub Release upload
 // ---------------------------------------------------------------------------
 async function uploadToRelease(filePath, assetName) {
-  if (!GH_TOKEN || !GH_REPO) { log('GH upload skipped (no credentials)', 'warn'); return null; }
-  var hdr     = { 'Authorization': 'Bearer ' + GH_TOKEN, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+  if (!GH_TOKEN || !GH_REPO) { log('GH upload skipped', 'warn'); return null; }
+  var hdr     = {
+    'Authorization':        'Bearer ' + GH_TOKEN,
+    'Accept':               'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28'
+  };
   var apiBase = 'https://api.github.com/repos/' + GH_REPO;
   var relId   = null, relUrl = null;
 
@@ -128,24 +135,27 @@ async function uploadToRelease(filePath, assetName) {
   if (gr.ok) {
     var rel = await gr.json(); relId = rel.id; relUrl = rel.html_url;
     log('Release found (id=' + relId + ')', 'ok');
-  } else {
+  } else if (gr.status === 404) {
     log('Creating release...', 'info');
     var cr = await fetch(apiBase + '/releases', {
-      method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, hdr),
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, hdr),
       body: JSON.stringify({ tag_name: RELEASE_TAG, name: 'Ofoq Renders',
-        body: 'Automated renders.', draft: false, prerelease: false })
+        body: 'Automated renders from Ofoq Studio.', draft: false, prerelease: false })
     });
     if (!cr.ok) throw new Error('Create release: ' + (await cr.text()).slice(0, 200));
     var c = await cr.json(); relId = c.id; relUrl = c.html_url;
     log('Release created (id=' + relId + ')', 'ok');
+  } else {
+    throw new Error('GH API: ' + (await gr.text()).slice(0, 200));
   }
 
   log('Uploading "' + assetName + '"...', 'info');
-  var buf = fs.readFileSync(filePath);
+  var buf   = fs.readFileSync(filePath);
   var upUrl = 'https://uploads.github.com/repos/' + GH_REPO
             + '/releases/' + relId + '/assets?name=' + encodeURIComponent(assetName);
-  var up = await fetch(upUrl, {
-    method: 'POST',
+  var up    = await fetch(upUrl, {
+    method:  'POST',
     headers: Object.assign({ 'Content-Type': 'application/octet-stream', 'Content-Length': String(buf.length) }, hdr),
     body: buf
   });
@@ -155,7 +165,7 @@ async function uploadToRelease(filePath, assetName) {
     if (exst) {
       await fetch(apiBase + '/releases/assets/' + exst.id, { method: 'DELETE', headers: hdr });
       up = await fetch(upUrl, {
-        method: 'POST',
+        method:  'POST',
         headers: Object.assign({ 'Content-Type': 'application/octet-stream', 'Content-Length': String(buf.length) }, hdr),
         body: buf
       });
@@ -191,78 +201,72 @@ async function saveBlobFromPage(page, blobUrl, destPath) {
 }
 
 // ---------------------------------------------------------------------------
-// FFmpeg helpers
+// WebCodecs full support check
 // ---------------------------------------------------------------------------
-function ffmpegAvailable() {
-  try {
-    cp.execSync('ffmpeg -version', { stdio: 'ignore' });
-    return true;
-  } catch(e) { return false; }
-}
+async function checkWebCodecsSupport(page) {
+  var support = await page.evaluate(function() {
+    var result = {
+      VideoEncoder:  typeof window.VideoEncoder  !== 'undefined',
+      VideoDecoder:  typeof window.VideoDecoder  !== 'undefined',
+      AudioEncoder:  typeof window.AudioEncoder  !== 'undefined',
+      AudioDecoder:  typeof window.AudioDecoder  !== 'undefined',
+      AudioContext:  typeof window.AudioContext   !== 'undefined' || typeof window.webkitAudioContext !== 'undefined',
+      OfflineAudioContext: typeof window.OfflineAudioContext !== 'undefined',
+      VideoFrame:    typeof window.VideoFrame    !== 'undefined',
+      EncodedVideoChunk: typeof window.EncodedVideoChunk !== 'undefined',
+      EncodedAudioChunk: typeof window.EncodedAudioChunk !== 'undefined',
+    };
 
-// Download a URL to a local file using Node fetch
-async function downloadFile(url, destPath) {
-  var resp = await fetch(url);
-  if (!resp.ok) throw new Error('Download failed (' + resp.status + '): ' + url);
-  var buf = Buffer.from(await resp.arrayBuffer());
-  fs.writeFileSync(destPath, buf);
-  return buf.length;
-}
-
-// Merge silent video + audio files using FFmpeg
-// audioFiles: array of local paths (e.g. [/tmp/seg0.mp3, /tmp/seg1.mp3])
-async function mergeAudioWithVideo(videoPath, audioFiles, outputPath) {
-  if (!audioFiles || audioFiles.length === 0) {
-    log('No audio files to merge', 'warn');
-    return false;
-  }
-
-  var tmpDir = path.join(os.tmpdir(), 'ofoq-audio-' + Date.now());
-  ensureDir(tmpDir);
-
-  var mergedAudio = path.join(tmpDir, 'merged.mp3');
-
-  if (audioFiles.length === 1) {
-    // Single audio file - use directly
-    mergedAudio = audioFiles[0];
-    log('Using single audio file', 'info');
-  } else {
-    // Multiple segments - concatenate with FFmpeg
-    log('Concatenating ' + audioFiles.length + ' audio segments...', 'info');
-    var listFile = path.join(tmpDir, 'concat.txt');
-    var listContent = audioFiles.map(function(f) {
-      return "file '" + f.replace(/'/g, "'\\''") + "'";
-    }).join('\n');
-    fs.writeFileSync(listFile, listContent);
-
-    var concatCmd = 'ffmpeg -y -f concat -safe 0 -i "' + listFile + '" -c copy "' + mergedAudio + '"';
-    log('FFmpeg concat: ' + concatCmd, 'info');
-    try {
-      cp.execSync(concatCmd, { stdio: 'pipe' });
-      log('Audio concatenated: ' + mergedAudio, 'ok');
-    } catch(e) {
-      log('FFmpeg concat error: ' + (e.stderr ? e.stderr.toString().slice(0, 300) : e.message), 'err');
-      return false;
+    // Test if AudioEncoder can actually be configured (not just declared)
+    result.AudioEncoderFunctional = false;
+    if (result.AudioEncoder) {
+      try {
+        var enc = new AudioEncoder({
+          output: function() {},
+          error:  function() {}
+        });
+        // Try configuring with AAC-LC
+        enc.configure({ codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 });
+        result.AudioEncoderFunctional = (enc.state === 'configured');
+        enc.close();
+      } catch(e) {
+        result.AudioEncoderError = e.message;
+      }
     }
-  }
 
-  // Merge video + audio
-  // -c:v copy  = keep video as-is (no re-encode)
-  // -c:a aac   = encode audio to AAC
-  // -shortest  = cut to shortest stream
-  var mergeCmd = 'ffmpeg -y -i "' + videoPath + '" -i "' + mergedAudio + '" '
-    + '-c:v copy -c:a aac -b:a 192k -shortest "' + outputPath + '"';
+    // Test OfflineAudioContext - can it start?
+    result.OfflineAudioContextFunctional = false;
+    if (result.OfflineAudioContext) {
+      try {
+        var oac = new OfflineAudioContext(2, 1024, 48000);
+        result.OfflineAudioContextFunctional = typeof oac.startRendering === 'function';
+      } catch(e) {
+        result.OfflineAudioContextError = e.message;
+      }
+    }
 
-  log('FFmpeg merge: video + audio...', 'info');
-  try {
-    var result = cp.execSync(mergeCmd, { stdio: 'pipe' });
-    log('Merge complete: ' + outputPath, 'ok');
-    return true;
-  } catch(e) {
-    var stderr = e.stderr ? e.stderr.toString() : e.message;
-    log('FFmpeg merge error: ' + stderr.slice(-400), 'err');
-    return false;
-  }
+    return result;
+  });
+
+  console.log('');
+  console.log('  +--------------------------------------------------+');
+  console.log('  |        WebCodecs Support Report                  |');
+  console.log('  +--------------------------------------------------+');
+  log('VideoEncoder          : ' + (support.VideoEncoder         ? 'YES' : 'NO'), support.VideoEncoder         ? 'ok' : 'err');
+  log('VideoDecoder          : ' + (support.VideoDecoder         ? 'YES' : 'NO'), support.VideoDecoder         ? 'ok' : 'warn');
+  log('VideoFrame            : ' + (support.VideoFrame           ? 'YES' : 'NO'), support.VideoFrame           ? 'ok' : 'warn');
+  log('EncodedVideoChunk     : ' + (support.EncodedVideoChunk    ? 'YES' : 'NO'), support.EncodedVideoChunk    ? 'ok' : 'warn');
+  log('AudioEncoder (API)    : ' + (support.AudioEncoder         ? 'YES' : 'NO'), support.AudioEncoder         ? 'ok' : 'warn');
+  log('AudioEncoder (config) : ' + (support.AudioEncoderFunctional ? 'YES' : 'NO - ' + (support.AudioEncoderError || 'failed')), support.AudioEncoderFunctional ? 'ok' : 'err');
+  log('AudioDecoder          : ' + (support.AudioDecoder         ? 'YES' : 'NO'), support.AudioDecoder         ? 'ok' : 'warn');
+  log('EncodedAudioChunk     : ' + (support.EncodedAudioChunk    ? 'YES' : 'NO'), support.EncodedAudioChunk    ? 'ok' : 'warn');
+  log('AudioContext          : ' + (support.AudioContext         ? 'YES' : 'NO'), support.AudioContext         ? 'ok' : 'warn');
+  log('OfflineAudioContext   : ' + (support.OfflineAudioContext  ? 'YES' : 'NO'), support.OfflineAudioContext  ? 'ok' : 'warn');
+  log('OfflineAC.startRender : ' + (support.OfflineAudioContextFunctional ? 'YES' : 'NO - ' + (support.OfflineAudioContextError || 'failed')), support.OfflineAudioContextFunctional ? 'ok' : 'err');
+  console.log('  +--------------------------------------------------+');
+  console.log('');
+
+  return support;
 }
 
 // ---------------------------------------------------------------------------
@@ -281,7 +285,6 @@ async function main() {
   log('Timeout     : ' + fmtTime(TIMEOUT_SEC),               'step');
   log('GH Upload   : ' + (GH_TOKEN   ? 'yes' : 'no'),       'step');
   log('FB Update   : ' + (FB_SA_JSON ? 'yes' : 'no'),       'step');
-  log('FFmpeg      : ' + (ffmpegAvailable() ? 'available' : 'NOT FOUND'), ffmpegAvailable() ? 'ok' : 'warn');
   console.log('');
 
   ensureDir(DOWNLOAD_DIR);
@@ -289,14 +292,18 @@ async function main() {
 
   await firestoreUpdate('running', null);
 
-  // Launch Chromium
   log('Launching Chromium...', 'info');
   var browser = await playwright.chromium.launch({
     headless: HEADLESS,
     args: [
-      '--no-sandbox', '--disable-setuid-sandbox', '--disable-web-security',
-      '--enable-features=WebCodecs,VideoToolbox', '--use-gl=angle',
-      '--use-angle=swiftshader', '--ignore-gpu-blocklist', '--disable-gpu-sandbox',
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-web-security',
+      '--enable-features=WebCodecs,VideoToolbox',
+      '--use-gl=angle',
+      '--use-angle=swiftshader',
+      '--ignore-gpu-blocklist',
+      '--disable-gpu-sandbox',
       '--js-flags=--max-old-space-size=4096'
     ]
   });
@@ -306,47 +313,69 @@ async function main() {
   context.setDefaultTimeout(TIMEOUT_SEC * 1000);
   var page    = await context.newPage();
 
-  // Verbose page logging
+  // Page logging - verbose
   page.on('pageerror', function(err) {
     log('[PAGE ERROR] ' + err.message, 'err');
   });
   page.on('console', function(msg) {
     var txt  = msg.text();
     var type = msg.type();
+    // Suppress known harmless GSAP plugin 404s and community Firebase errors
+    if (txt.indexOf('CustomBounce') !== -1 || txt.indexOf('CustomWiggle') !== -1 ||
+        txt.indexOf('Physics2D') !== -1) return;
+    if (txt.indexOf('[Comm]') !== -1 && txt.indexOf('permission') !== -1) return;
+    if (txt.indexOf('WebChannelConnection') !== -1) return;
+
     if (type === 'error') {
-      // Suppress known non-critical 404s for GSAP optional plugins
-      if (txt.indexOf('CustomBounce') !== -1 || txt.indexOf('CustomWiggle') !== -1 ||
-          txt.indexOf('Physics2D') !== -1) return;
       log('[PAGE] ' + txt.slice(0, 200), 'err');
     } else if (type === 'warning' || type === 'warn') {
-      if (txt.indexOf('Comm') !== -1 && txt.indexOf('permission') !== -1) return;
       log('[PAGE] ' + txt.slice(0, 200), 'warn');
-    } else if (txt.indexOf('[RenderJob]') !== -1 || txt.indexOf('[OfoqAddon]') !== -1) {
-      log('[PAGE] ' + txt.slice(0, 200), 'info');
-    } else if (txt.indexOf('mux') !== -1 || txt.indexOf('Mux') !== -1 ||
-               txt.indexOf('AAC') !== -1 || txt.indexOf('Audio') !== -1 ||
-               txt.indexOf('encode') !== -1 || txt.indexOf('Render') !== -1) {
+    } else if (
+      txt.indexOf('[RenderJob]') !== -1 || txt.indexOf('[OfoqAddon]')  !== -1 ||
+      txt.indexOf('muxMP4')     !== -1  || txt.indexOf('muxWebM')      !== -1 ||
+      txt.indexOf('AAC')        !== -1  || txt.indexOf('Opus')         !== -1 ||
+      txt.indexOf('muxer')      !== -1  || txt.indexOf('finalize')     !== -1 ||
+      txt.indexOf('Audio')      !== -1  || txt.indexOf('Render')       !== -1
+    ) {
       log('[PAGE] ' + txt.slice(0, 200), 'info');
     }
   });
 
   var startTime = Date.now();
 
+  // -------------------------------------------------------------------------
+  // Open render page
+  // -------------------------------------------------------------------------
   log('Opening: ' + RENDER_URL, 'info');
   await page.goto(RENDER_URL, { waitUntil: 'load', timeout: 90000 });
   log('Page loaded', 'ok');
 
-  var wcOk = await page.evaluate(function() { return typeof window.VideoEncoder !== 'undefined'; });
-  if (!wcOk) {
-    log('FATAL: VideoEncoder not supported', 'err');
+  // -------------------------------------------------------------------------
+  // WebCodecs full support check
+  // -------------------------------------------------------------------------
+  var support = await checkWebCodecsSupport(page);
+
+  if (!support.VideoEncoder) {
+    log('FATAL: VideoEncoder not supported - cannot render video', 'err');
     await browser.close();
-    await firestoreUpdate('error', { errorMsg: 'VideoEncoder not supported' });
+    await firestoreUpdate('error', { errorMsg: 'VideoEncoder not supported in this Chromium build' });
     process.exit(10);
   }
-  log('WebCodecs OK', 'ok');
-  log('Note: AudioEncoder skipped in render job mode - FFmpeg will merge audio', 'info');
 
-  // Wait for overlay
+  if (!support.AudioEncoderFunctional) {
+    log('WARNING: AudioEncoder not functional - renders will have NO audio', 'warn');
+    log('Reason: ' + (support.AudioEncoderError || 'configuration failed'), 'warn');
+    log('This is a known Chromium headless limitation on some CI environments', 'warn');
+  }
+
+  if (!support.OfflineAudioContextFunctional) {
+    log('WARNING: OfflineAudioContext.startRendering() may hang - audio muxing may fail', 'warn');
+  }
+
+  // -------------------------------------------------------------------------
+  // Wait for render overlay
+  // -------------------------------------------------------------------------
+  log('Waiting for render overlay...', 'info');
   await page.waitForFunction(function() {
     var ids = ['rj-phase-password','rj-phase-rendering','rj-phase-done','rj-phase-error','rj-phase-loading'];
     for (var i = 0; i < ids.length; i++) {
@@ -354,7 +383,7 @@ async function main() {
       if (el && el.style.display && el.style.display !== 'none') return true;
     }
     return false;
-  }, { timeout: 40000 }).catch(function() { log('Warning: overlay not detected', 'warn'); });
+  }, { timeout: 40000 }).catch(function() { log('Warning: overlay not detected in 40s', 'warn'); });
 
   // Password
   var needsPw = await page.evaluate(function() {
@@ -365,9 +394,10 @@ async function main() {
     if (!PASSWORD) {
       log('ERROR: password required', 'err');
       await browser.close();
-      await firestoreUpdate('error', { errorMsg: 'Password required' });
+      await firestoreUpdate('error', { errorMsg: 'Password required but not provided' });
       process.exit(2);
     }
+    log('Entering password...', 'info');
     await page.fill('#rjPasswordInput', PASSWORD);
     await page.click('#rjPasswordBtn');
     await page.waitForTimeout(2500);
@@ -380,8 +410,10 @@ async function main() {
     log('Password accepted', 'ok');
   }
 
+  // -------------------------------------------------------------------------
   // Progress tracking
-  log('Render in progress (video only - audio merged by FFmpeg)...', 'info');
+  // -------------------------------------------------------------------------
+  log('Render in progress...', 'info');
   console.log('');
 
   var lastPct = -1;
@@ -405,7 +437,9 @@ async function main() {
     } catch(e) {}
   }, 1000);
 
+  // -------------------------------------------------------------------------
   // Wait for OFOQ_RENDER_DONE
+  // -------------------------------------------------------------------------
   var renderDone = false;
   var diagMsg    = null;
 
@@ -432,19 +466,27 @@ async function main() {
           phase:       phase,
           renderDone:  window.OFOQ_RENDER_DONE,
           renderError: window.OFOQ_RENDER_ERROR,
-          blobUrl:     window.OFOQ_RENDER_BLOB_URL,
-          logLines:    spans.slice(-8)
+          blobUrl:     !!window.OFOQ_RENDER_BLOB_URL,
+          hasAudio:    typeof audioBuffer !== 'undefined' ? !!audioBuffer : 'undefined',
+          logLines:    spans.slice(-10)
         };
       });
-      log('Progress  : ' + dbg.pct,         'info');
-      log('Phase     : ' + dbg.phase,        'info');
-      log('DONE flag : ' + dbg.renderDone,   'info');
-      log('ERROR flag: ' + dbg.renderError,  'info');
-      log('Blob URL  : ' + (dbg.blobUrl ? 'present' : 'null'), 'info');
-      log('Last logs :', 'info');
+      log('Progress         : ' + dbg.pct,        'info');
+      log('Current phase    : ' + dbg.phase,       'info');
+      log('OFOQ_RENDER_DONE : ' + dbg.renderDone,  'info');
+      log('OFOQ_RENDER_ERROR: ' + dbg.renderError, 'info');
+      log('Blob URL present : ' + dbg.blobUrl,     'info');
+      log('audioBuffer      : ' + dbg.hasAudio,    'info');
+      log('Last log lines:', 'info');
       (dbg.logLines || []).forEach(function(l) { if (l.trim()) log('  >> ' + l.trim(), 'info'); });
-      diagMsg = 'Timeout after ' + fmtTime(TIMEOUT_SEC) + ' | phase=' + dbg.phase + ' | last=' + (dbg.logLines || []).slice(-1)[0];
-    } catch(de) { diagMsg = 'Timeout ' + fmtTime(TIMEOUT_SEC); }
+      diagMsg = 'Timeout ' + fmtTime(TIMEOUT_SEC)
+        + ' | phase=' + dbg.phase
+        + ' | pct=' + dbg.pct
+        + ' | DONE=' + dbg.renderDone
+        + ' | lastLog=' + ((dbg.logLines || []).slice(-1)[0] || '');
+    } catch(de) {
+      diagMsg = 'Timeout ' + fmtTime(TIMEOUT_SEC) + ' (could not collect debug info)';
+    }
   }
 
   clearInterval(ticker);
@@ -466,122 +508,58 @@ async function main() {
     process.exit(5);
   }
 
-  log('Video encoding complete!', 'ok');
-
-  // Collect render info + audio URLs from page
+  // Get render info
   var renderInfo = await page.evaluate(function() {
     return {
-      filename:    window.OFOQ_RENDER_FILENAME    || 'render-output.mp4',
-      sizeMB:      window.OFOQ_RENDER_SIZE_MB     || '0',
-      ext:         window.OFOQ_RENDER_EXT         || 'mp4',
-      blobUrl:     window.OFOQ_RENDER_BLOB_URL    || null,
-      hasAudio:    window.OFOQ_RENDER_HAS_AUDIO   || false,
-      audioUrls:   window.OFOQ_RENDER_AUDIO_URLS  || [],
-      audioSingle: window.OFOQ_RENDER_AUDIO_SINGLE || null
+      filename: window.OFOQ_RENDER_FILENAME || 'render-output.mp4',
+      sizeMB:   window.OFOQ_RENDER_SIZE_MB  || '0',
+      ext:      window.OFOQ_RENDER_EXT      || 'mp4',
+      blobUrl:  window.OFOQ_RENDER_BLOB_URL || null
     };
   });
 
-  log('File: ' + renderInfo.filename + ' (video-only: ' + renderInfo.sizeMB + ' MB)', 'ok');
-  log('Has audio: ' + renderInfo.hasAudio + ' | Segment URLs: ' + renderInfo.audioUrls.length, 'info');
+  log('Render complete: ' + renderInfo.filename + ' (' + renderInfo.sizeMB + ' MB)', 'ok');
 
   if (!renderInfo.blobUrl) {
-    log('ERROR: blob URL is null', 'err');
+    log('ERROR: OFOQ_RENDER_BLOB_URL is null', 'err');
     await browser.close();
-    await firestoreUpdate('error', { errorMsg: 'Blob URL not available' });
+    await firestoreUpdate('error', { errorMsg: 'Blob URL not available after render' });
     process.exit(7);
   }
 
-  // Build paths
+  // Build output path
   var safeName  = (SCENE_NAME || 'render').replace(/[^a-z0-9_\-]/gi, '_').slice(0, 40);
   var jobSuffix = JOB_ID ? JOB_ID.slice(0, 8) : Date.now().toString(36);
   var ext       = renderInfo.ext || 'mp4';
+  var assetName = safeName + '_' + jobSuffix + '.' + ext;
 
-  var finalDir  = OUTPUT_PATH
-    ? path.dirname(path.resolve(OUTPUT_PATH))
-    : DOWNLOAD_DIR;
-  ensureDir(finalDir);
+  var finalPath;
+  if (OUTPUT_PATH) {
+    var resolved = path.resolve(OUTPUT_PATH);
+    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+      finalPath = path.join(resolved, assetName);
+    } else {
+      finalPath = resolved;
+    }
+  } else {
+    finalPath = path.join(DOWNLOAD_DIR, assetName);
+  }
 
-  var silentPath  = path.join(finalDir, safeName + '_' + jobSuffix + '_silent.' + ext);
-  var finalName   = safeName + '_' + jobSuffix + '.' + ext;
-  var finalPath   = path.join(finalDir, finalName);
+  ensureDir(path.dirname(finalPath));
 
-  // Save silent video blob
-  log('Saving silent video blob...', 'info');
-  var silentBytes = await saveBlobFromPage(page, renderInfo.blobUrl, silentPath);
-  log('Silent video saved: ' + (silentBytes/1024/1024).toFixed(2) + ' MB', 'ok');
+  log('Reading blob from browser memory...', 'info');
+  var bytesSaved = await saveBlobFromPage(page, renderInfo.blobUrl, finalPath);
+  var savedMB    = (bytesSaved / 1024 / 1024).toFixed(2);
+  log('Saved: ' + finalPath + ' (' + savedMB + ' MB)', 'ok');
 
   await browser.close();
-  log('Browser closed', 'ok');
-
-  // -------------------------------------------------------------------------
-  // FFmpeg: download audio + merge
-  // -------------------------------------------------------------------------
-  var audioUrls = renderInfo.audioUrls.filter(function(u) { return u && u.indexOf('http') === 0; });
-  if (!audioUrls.length && renderInfo.audioSingle && renderInfo.audioSingle.indexOf('http') === 0) {
-    audioUrls = [renderInfo.audioSingle];
-  }
-
-  var usedFFmpeg = false;
-
-  if (audioUrls.length > 0 && ffmpegAvailable()) {
-    log('=== Audio merge phase ===', 'info');
-    log('Downloading ' + audioUrls.length + ' audio segment(s)...', 'info');
-
-    var tmpAudioDir = path.join(os.tmpdir(), 'ofoq-audio-' + Date.now());
-    ensureDir(tmpAudioDir);
-    var audioFiles  = [];
-
-    for (var ai = 0; ai < audioUrls.length; ai++) {
-      var segPath = path.join(tmpAudioDir, 'seg' + ai + '.mp3');
-      try {
-        var segBytes = await downloadFile(audioUrls[ai], segPath);
-        audioFiles.push(segPath);
-        log('Segment ' + (ai+1) + '/' + audioUrls.length + ': ' + (segBytes/1024).toFixed(0) + ' KB', 'ok');
-      } catch(e) {
-        log('Segment ' + (ai+1) + ' failed: ' + e.message, 'warn');
-      }
-    }
-
-    if (audioFiles.length > 0) {
-      var merged = await mergeAudioWithVideo(silentPath, audioFiles, finalPath);
-      if (merged) {
-        usedFFmpeg = true;
-        // Remove silent video (keep only final)
-        try { fs.unlinkSync(silentPath); } catch(e) {}
-        var finalBytes = fs.statSync(finalPath).size;
-        log('Final video with audio: ' + (finalBytes/1024/1024).toFixed(2) + ' MB', 'ok');
-      } else {
-        log('FFmpeg merge failed - using silent video as fallback', 'warn');
-        try { fs.renameSync(silentPath, finalPath); } catch(e) { finalPath = silentPath; }
-      }
-    } else {
-      log('No audio segments downloaded - using silent video', 'warn');
-      try { fs.renameSync(silentPath, finalPath); } catch(e) { finalPath = silentPath; }
-    }
-
-    // Cleanup tmp audio
-    try {
-      audioFiles.forEach(function(f) { try { fs.unlinkSync(f); } catch(e) {} });
-      fs.rmdirSync(tmpAudioDir);
-    } catch(e) {}
-
-  } else {
-    if (audioUrls.length === 0) {
-      log('No audio URLs - video is silent', 'info');
-    } else {
-      log('FFmpeg not available - video will be silent', 'warn');
-    }
-    try { fs.renameSync(silentPath, finalPath); } catch(e) { finalPath = silentPath; }
-  }
-
-  var savedMB = (fs.statSync(finalPath).size / 1024 / 1024).toFixed(2);
 
   // Upload to GitHub Release
   var downloadUrl = null;
   var releaseUrl  = null;
   if (GH_TOKEN && GH_REPO) {
     try {
-      var r = await uploadToRelease(finalPath, finalName);
+      var r = await uploadToRelease(finalPath, assetName);
       if (r) { downloadUrl = r.downloadUrl; releaseUrl = r.releaseUrl; }
     } catch(e) { log('GH upload error: ' + e.message, 'err'); }
   }
@@ -589,7 +567,7 @@ async function main() {
   var totalTime = (Date.now() - startTime) / 1000;
   await firestoreUpdate('done', {
     downloadUrl: downloadUrl || ('local://' + finalPath),
-    filename:    finalName,
+    filename:    assetName,
     sizeMB:      parseFloat(savedMB),
     runUrl:      releaseUrl || ''
   });
@@ -598,12 +576,11 @@ async function main() {
   console.log('  RENDER COMPLETE');
   console.log('  =============================================');
   console.log('');
-  log('File      : ' + finalName,                                  'ok');
-  log('Audio     : ' + (usedFFmpeg ? 'merged by FFmpeg' : 'none'), usedFFmpeg ? 'ok' : 'warn');
-  log('Size      : ' + savedMB + ' MB',                            'ok');
-  log('Time      : ' + fmtTime(totalTime),                         'ok');
-  log('Saved     : ' + finalPath,                                   'ok');
-  if (downloadUrl) log('Download  : ' + downloadUrl,                'ok');
+  log('File      : ' + assetName,          'ok');
+  log('Size      : ' + savedMB + ' MB',    'ok');
+  log('Time      : ' + fmtTime(totalTime), 'ok');
+  log('Saved     : ' + finalPath,          'ok');
+  if (downloadUrl) log('Download  : ' + downloadUrl, 'ok');
   console.log('');
 }
 
