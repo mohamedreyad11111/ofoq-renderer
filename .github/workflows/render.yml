@@ -35,15 +35,41 @@ jobs:
         with:
           node-version: '20'
 
+  
+
       - name: Install dependencies
         run: npm install
 
-      # ✅ أضف الـ step دي هنا — قبل install playwright
-      - name: Install AAC codec support
-        run: sudo apt-get install -y chromium-codecs-ffmpeg-extra
-
       - name: Install Playwright Chromium
         run: npx playwright install chromium --with-deps
+
+      # لازم يكون بعد install playwright عشان نعرف المسار
+      - name: Inject AAC codec into Playwright Chromium
+        run: |
+          sudo apt-get install -y chromium-codecs-ffmpeg-extra
+
+          # ابحث عن مسار Playwright's Chromium
+          CHROME_DIR=$(find ~/.cache/ms-playwright -name "chrome" -type f 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+
+          echo "Playwright Chrome dir: $CHROME_DIR"
+
+          if [ -z "$CHROME_DIR" ]; then
+            echo "ERROR: Could not find Playwright Chromium directory"
+            find ~/.cache/ms-playwright -maxdepth 4 -type f -name "*.so" | head -10
+            exit 1
+          fi
+
+          if [ ! -f /usr/lib/chromium-browser/libffmpeg.so ]; then
+            echo "ERROR: libffmpeg.so not found after apt-get install"
+            find /usr/lib -name "libffmpeg.so" 2>/dev/null
+            exit 1
+          fi
+
+          # استبدل الـ libffmpeg.so المحدودة ببتاعة AAC
+          cp /usr/lib/chromium-browser/libffmpeg.so "$CHROME_DIR/libffmpeg.so"
+          echo "SUCCESS: libffmpeg.so copied to $CHROME_DIR"
+
+  
 
       - name: Run render job
         run: |
