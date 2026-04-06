@@ -38,6 +38,10 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # ✅ أضف الـ step دي هنا — قبل install playwright
+      - name: Install AAC codec support
+        run: sudo apt-get install -y chromium-codecs-ffmpeg-extra
+
       - name: Install Playwright Chromium
         run: npx playwright install chromium --with-deps
 
