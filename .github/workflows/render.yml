@@ -43,33 +43,31 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install chromium --with-deps
 
-      # لازم يكون بعد install playwright عشان نعرف المسار
       - name: Inject AAC codec into Playwright Chromium
         run: |
           sudo apt-get install -y chromium-codecs-ffmpeg-extra
 
-          # ابحث عن مسار Playwright's Chromium
-          CHROME_DIR=$(find ~/.cache/ms-playwright -name "chrome" -type f 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+          # ابحث عن libffmpeg.so في كل الـ system
+          FFMPEG_SRC=$(find /usr /opt /snap -name "libffmpeg.so" 2>/dev/null | head -1)
+          echo "Found libffmpeg.so at: $FFMPEG_SRC"
 
+          if [ -z "$FFMPEG_SRC" ]; then
+            echo "--- apt-get لم يثبت libffmpeg.so، نجرب ffmpeg مباشرة ---"
+            sudo apt-get install -y ffmpeg libavcodec-extra
+            FFMPEG_SRC=$(find /usr -name "libffmpeg.so" 2>/dev/null | head -1)
+            echo "After ffmpeg install: $FFMPEG_SRC"
+          fi
+
+          CHROME_DIR=$(find ~/.cache/ms-playwright -name "chrome" -type f 2>/dev/null | head -1 | xargs dirname)
           echo "Playwright Chrome dir: $CHROME_DIR"
 
-          if [ -z "$CHROME_DIR" ]; then
-            echo "ERROR: Could not find Playwright Chromium directory"
-            find ~/.cache/ms-playwright -maxdepth 4 -type f -name "*.so" | head -10
+          if [ -z "$FFMPEG_SRC" ] || [ -z "$CHROME_DIR" ]; then
+            echo "FATAL: لم نجد المسارات المطلوبة"
             exit 1
           fi
 
-          if [ ! -f /usr/lib/chromium-browser/libffmpeg.so ]; then
-            echo "ERROR: libffmpeg.so not found after apt-get install"
-            find /usr/lib -name "libffmpeg.so" 2>/dev/null
-            exit 1
-          fi
-
-          # استبدل الـ libffmpeg.so المحدودة ببتاعة AAC
-          cp /usr/lib/chromium-browser/libffmpeg.so "$CHROME_DIR/libffmpeg.so"
-          echo "SUCCESS: libffmpeg.so copied to $CHROME_DIR"
-
-  
+          cp "$FFMPEG_SRC" "$CHROME_DIR/libffmpeg.so"
+          echo "SUCCESS: copied $FFMPEG_SRC → $CHROME_DIR/libffmpeg.so"
 
       - name: Run render job
         run: |
