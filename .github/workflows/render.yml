@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   render:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 30
 
     steps:
@@ -38,19 +38,11 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Install Playwright Chromium
-        run: npx playwright install chromium --with-deps
-
-      - name: Setup virtual audio device (PulseAudio)
-        run: |
-          sudo apt-get install -y pulseaudio pulseaudio-utils
-          pulseaudio --start --exit-idle-time=-1
-          pactl load-module module-null-sink sink_name=DummyOutput
-          pactl set-default-sink DummyOutput
-          echo "Virtual audio device ready"
-          pactl info | grep "Default Sink"
+      - name: Install Playwright + Google Chrome
+        run: npx playwright install chrome --with-deps
 
       - name: Run render job
+        shell: bash
         run: |
           node render-job.js \
             --url "${{ inputs.render_url }}" \
@@ -65,4 +57,3 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-          PULSE_SERVER: unix:/run/user/$(id -u)/pulse/native
