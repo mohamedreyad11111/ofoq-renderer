@@ -35,14 +35,10 @@ jobs:
         with:
           node-version: '20'
 
-  
-
       - name: Install dependencies
         run: npm install
 
-
-
-      - - name: Install Google Chrome
+      - name: Install Google Chrome
         run: |
           wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
           echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" \
@@ -53,7 +49,7 @@ jobs:
 
       - name: Install Playwright Chromium
         run: npx playwright install chromium --with-deps
-        
+
       - name: Run render job
         run: |
           node render-job.js \
