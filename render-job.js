@@ -318,6 +318,7 @@ async function main() {
   log('Launching Chromium...', 'info');
   var browser = await playwright.chromium.launch({
     headless: HEADLESS,
+    executablePath: '/usr/bin/google-chrome-stable',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
