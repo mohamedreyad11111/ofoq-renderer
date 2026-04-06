@@ -204,7 +204,7 @@ async function saveBlobFromPage(page, blobUrl, destPath) {
 // WebCodecs full support check
 // ---------------------------------------------------------------------------
 async function checkWebCodecsSupport(page) {
-  var support = await page.evaluate(function() {
+  var support = await page.evaluate(async function() {
     var result = {
       VideoEncoder:  typeof window.VideoEncoder  !== 'undefined',
       VideoDecoder:  typeof window.VideoDecoder  !== 'undefined',
@@ -234,12 +234,35 @@ async function checkWebCodecsSupport(page) {
       }
     }
 
-    // Test OfflineAudioContext - can it start?
+    // Test OfflineAudioContext - actually CALL startRendering with a tiny buffer
+    // This catches headless CI environments where the API exists but hangs
     result.OfflineAudioContextFunctional = false;
     if (result.OfflineAudioContext) {
       try {
-        var oac = new OfflineAudioContext(2, 1024, 48000);
-        result.OfflineAudioContextFunctional = typeof oac.startRendering === 'function';
+        // Use a callback-based approach so no await needed at this level
+        // The page.evaluate callback is not async - we return a Promise instead
+        var _oacResult = await new Promise(function(outerResolve) {
+          var done = false;
+          var timer = setTimeout(function() {
+            if (!done) { done = true; outerResolve({ ok: false, error: 'startRendering() timed out after 5s' }); }
+          }, 5000);
+          try {
+            var oac = new OfflineAudioContext(1, 512, 22050);
+            var osc = oac.createOscillator();
+            osc.connect(oac.destination);
+            osc.start(0);
+            oac.startRendering().then(function(buf) {
+              if (!done) { done = true; clearTimeout(timer); outerResolve({ ok: true, samples: buf.length }); }
+            }).catch(function(e) {
+              if (!done) { done = true; clearTimeout(timer); outerResolve({ ok: false, error: e.message }); }
+            });
+          } catch(e) {
+            if (!done) { done = true; clearTimeout(timer); outerResolve({ ok: false, error: e.message }); }
+          }
+        });
+        result.OfflineAudioContextFunctional = _oacResult.ok;
+        if (!_oacResult.ok) result.OfflineAudioContextError = _oacResult.error;
+        else result.OfflineAudioContextSamples = _oacResult.samples;
       } catch(e) {
         result.OfflineAudioContextError = e.message;
       }
