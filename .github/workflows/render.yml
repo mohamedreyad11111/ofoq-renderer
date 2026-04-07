@@ -17,13 +17,17 @@ on:
         description: 'Scene name for the output filename'
         required: false
         default: 'render'
+      container:
+        description: 'Output container: mp4 or webm'
+        required: false
+        default: 'mp4'
 
 permissions:
   contents: write
 
 jobs:
   render:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
@@ -38,24 +42,33 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        id: playwright-cache
-        with:
-          path: C:\Users\runneradmin\AppData\Local\ms-playwright
-          key: playwright-chrome-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      # ── Cache Playwright Chrome ──────────────────────────────────────────
+      - name: Get Playwright version for cache key
+        id: pw-version
+        run: echo "version=$(node -e \"console.log(require('./node_modules/playwright/package.json').version)\")" >> $GITHUB_OUTPUT
 
-      - name: Install Playwright + Google Chrome
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
+      - name: Cache Playwright Chrome
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chrome-${{ steps.pw-version.outputs.version }}-linux
+
+      - name: Install Playwright Google Chrome + system deps
+        if: steps.pw-cache.outputs.cache-hit != 'true'
         run: npx playwright install chrome --with-deps
 
+      - name: Install Chrome system deps only (cache hit)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chrome
+      # ────────────────────────────────────────────────────────────────────
+
       - name: Run render job
-        shell: bash
         run: |
           node render-job.js \
             --url "${{ inputs.render_url }}" \
             --password "${{ inputs.password }}" \
-            --output "./output/${{ inputs.job_id }}.mp4" \
+            --output "./output/${{ inputs.job_id }}.${{ inputs.container }}" \
             --job-id "${{ inputs.job_id }}" \
             --scene-name "${{ inputs.scene_name }}" \
             --release-tag "ofoq-renders" \
