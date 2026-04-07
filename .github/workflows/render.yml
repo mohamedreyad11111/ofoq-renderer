@@ -35,8 +35,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm' # إضافة الـ Cache لتسريع الـ Workflow في المرات القادمة
-
+          
       - name: Install dependencies
         run: npm install
 
