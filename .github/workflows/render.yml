@@ -23,44 +23,38 @@ permissions:
 
 jobs:
   render:
-    name: Execute Rendering Process
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
-      - name: 1. Checkout Repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: 2. Setup Node.js 20
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm' # تسريع العمليات المستقبلية عبر التخزين المؤقت
-
-      - name: 3. Install Dependencies
+          cache: 'npm'
+          
+      - name: Install dependencies
         run: npm install
 
-      - name: 4. Install Playwright & Chrome
-        # تثبيت المتصفح مع كافة مكتبات النظام اللازمة (Dependencies)
+      - name: Install Playwright Dependencies and Chrome
         run: npx playwright install chrome --with-deps
 
-      - name: 5. Install Media Codecs & Audio Tools
+      - name: Install Media Codecs and Audio Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg libavcodec-extra gstreamer1.0-plugins-ugly gstreamer1.0-plugins-bad pulseaudio
 
-      - name: 6. Start PulseAudio (Virtual Audio)
-        # تشغيل خادم الصوت الوهمي في الخلفية
+      - name: Start PulseAudio
         run: |
           pulseaudio -D --exit-idle-time=-1
-          sleep 2 # الانتظار للتأكد من استقرار الخدمة
+          sleep 2
 
-      - name: 7. Run Render Job
+      - name: Run render job
         run: |
-          # إنشاء مجلد المخرجات
           mkdir -p ./output
-          
-          # تشغيل السكريبت مع تمرير المدخلات
           node render-job.js \
             --url "${{ github.event.inputs.render_url }}" \
             --password "${{ github.event.inputs.password }}" \
@@ -75,8 +69,7 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
 
-      - name: 8. Upload Artifact (Optional)
-        # خطوة إضافية اختيارية لحفظ الملف داخل GitHub في حال فشل الـ Upload الخارجي
+      - name: Upload Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
