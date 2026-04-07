@@ -23,7 +23,6 @@ permissions:
 
 jobs:
   render:
-    # استخدام Ubuntu لتقليل التكلفة وسرعة التشغيل
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -35,19 +34,39 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # تفعيل الكاش لـ npm لتسريع التحميل في المرات القادمة
-          
+      
+
       - name: Install dependencies
         run: npm install
 
-      - name: Install Playwright Dependencies and Chrome
-        # على Ubuntu، أمر --with-deps إلزامي لتثبيت مكتبات النظام مثل (libgbm, nss, fonts)
-        run: npx playwright install chrome --with-deps
+      # ── كاش المتصفح: نحفظ Chrome بعد أول تحميل ──────────────────────────
+      - name: Get Playwright version (for cache key)
+        id: pw-version
+        run: echo "version=$(npx playwright --version | awk '{print $2}')" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chrome-${{ steps.pw-version.outputs.version }}-${{ runner.os }}
+
+      - name: Install Playwright Chrome (+ system deps)
+        # --with-deps: يثبت libgbm/nss/fonts اللازمة على Ubuntu
+        # لو الكاش موجود → يثبت deps فقط بدون تحميل المتصفح
+        run: |
+          if [ "${{ steps.pw-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "✓ Browser cache hit — installing system deps only"
+            npx playwright install-deps chrome
+          else
+            echo "✗ No cache — downloading Chrome + system deps"
+            npx playwright install chrome --with-deps
+          fi
 
       - name: Run render job
         run: |
           mkdir -p ./output
-          
+
           node render-job.js \
             --url "${{ inputs.render_url }}" \
             --password "${{ inputs.password }}" \
@@ -61,5 +80,4 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-          # إضافة متغير بيئة لضمان تشغيل المتصفح في وضع headless على سيرفرات Linux
-          CI: true 
+          CI: true
