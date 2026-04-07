@@ -262,7 +262,6 @@ async function main() {
   await firestoreUpdate('running', null);
 
   // Launch Chromium
-    // Launch Chromium (Using official Chrome for Codec support)
   log('Launching Google Chrome...', 'info');
   var browser = await playwright.chromium.launch({
     channel: 'chrome',
@@ -271,15 +270,7 @@ async function main() {
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-web-security',
-      
-      // التعديلات الجديدة تبدأ من هنا:
-      '--disable-dev-shm-usage', // (مهم جداً) بيمنع كروم من الانهيار على لينكس بسبب مساحة الذاكرة المشتركة
-      '--autoplay-policy=no-user-gesture-required', // (إجباري) عشان الصوت يشتغل وتعمله Render بدون تدخل مستخدم
-      '--disable-audio-output', // بيخلي المتصفح يتجاهل عدم وجود كارت صوت حقيقي على السيرفر
-      
-      // دمجت لك الميزات اللي بتحتاجها مع بعض
-      '--enable-features=WebCodecs,VideoToolbox,PlatformHEVCDecoderSupport', 
-      
+      '--enable-features=WebCodecs,VideoToolbox',
       '--use-gl=angle',
       '--use-angle=swiftshader',
       '--ignore-gpu-blocklist',
@@ -288,7 +279,6 @@ async function main() {
     ]
   });
   log('Chrome ready', 'ok');
-
 
   var context = await browser.newContext({ acceptDownloads: true });
   context.setDefaultTimeout(TIMEOUT_SEC * 1000);
