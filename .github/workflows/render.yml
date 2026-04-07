@@ -23,7 +23,8 @@ permissions:
 
 jobs:
   render:
-    runs-on: windows-latest
+    # استخدام Ubuntu لتقليل التكلفة وسرعة التشغيل
+    runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
@@ -34,24 +35,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
+          # تفعيل الكاش لـ npm لتسريع التحميل في المرات القادمة
+          
       - name: Install dependencies
         run: npm install
 
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        id: playwright-cache
-        with:
-          path: C:\Users\runneradmin\AppData\Local\ms-playwright
-          key: playwright-chrome-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-
-      - name: Install Playwright + Google Chrome
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
+      - name: Install Playwright Dependencies and Chrome
+        # على Ubuntu، أمر --with-deps إلزامي لتثبيت مكتبات النظام مثل (libgbm, nss, fonts)
         run: npx playwright install chrome --with-deps
 
       - name: Run render job
-        shell: bash
         run: |
+          mkdir -p ./output
+          
           node render-job.js \
             --url "${{ inputs.render_url }}" \
             --password "${{ inputs.password }}" \
@@ -65,3 +61,5 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          # إضافة متغير بيئة لضمان تشغيل المتصفح في وضع headless على سيرفرات Linux
+          CI: true 
