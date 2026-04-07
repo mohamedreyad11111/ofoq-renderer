@@ -306,14 +306,25 @@ async function main() {
       log('[PAGE] ' + txt.slice(0, 200), 'warn');
     // Show render job messages
     } else if (txt.indexOf('[RenderJob]') !== -1 || txt.indexOf('[OfoqAddon]') !== -1) {
-      log('[PAGE] ' + txt.slice(0, 200), 'info');
+      // Settings line: طبعها بشكل بارز
+      if (txt.indexOf('Settings —') !== -1) {
+        log('', 'info');
+        log('┌─ إعدادات الريندر ──────────────────────────────────', 'step');
+        // استخرج كل key:value من السطر
+        var parts = txt.replace('[RenderJob] Settings — ', '').split(' | ');
+        parts.forEach(function(p) { if (p.trim()) log('│  ' + p.trim(), 'ok'); });
+        log('└────────────────────────────────────────────────────', 'step');
+        log('', 'info');
+      } else {
+        log('[PAGE] ' + txt.slice(0, 200), 'info');
+      }
     // Show render progress logs (Arabic render log text)
     } else if (txt.indexOf('Render') !== -1 || txt.indexOf('render') !== -1 ||
                txt.indexOf('Audio') !== -1 || txt.indexOf('audio') !== -1 ||
-               txt.indexOf('Audio') !== -1 || txt.indexOf('Mux') !== -1 ||
-               txt.indexOf('mux') !== -1 || txt.indexOf('encode') !== -1 ||
-               txt.indexOf('WebCodecs') !== -1 || txt.indexOf('AAC') !== -1 ||
-               txt.indexOf('Opus') !== -1 || txt.indexOf('ERROR') !== -1) {
+               txt.indexOf('Mux') !== -1 || txt.indexOf('mux') !== -1 ||
+               txt.indexOf('encode') !== -1 || txt.indexOf('WebCodecs') !== -1 ||
+               txt.indexOf('AAC') !== -1 || txt.indexOf('Opus') !== -1 ||
+               txt.indexOf('Settings') !== -1 || txt.indexOf('ERROR') !== -1) {
       log('[PAGE] ' + txt.slice(0, 200), 'info');
     }
   });
