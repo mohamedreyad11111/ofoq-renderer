@@ -45,7 +45,9 @@ jobs:
       # ── Cache Playwright Chrome ──────────────────────────────────────────
       - name: Get Playwright version for cache key
         id: pw-version
-        run: echo "version=$(node -e \"console.log(require('./node_modules/playwright/package.json').version)\")" >> $GITHUB_OUTPUT
+        run: |
+          PW_VERSION=$(node -p "require('./node_modules/playwright/package.json').version")
+          echo "version=$PW_VERSION" >> $GITHUB_OUTPUT
 
       - name: Cache Playwright Chrome
         id: pw-cache
