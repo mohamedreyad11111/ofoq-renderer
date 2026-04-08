@@ -17,6 +17,10 @@ on:
         description: 'Scene name for the output filename'
         required: false
         default: 'render'
+      release_tag:
+        description: 'GitHub Release tag to upload assets to (e.g. ofoq-renders, v1.0)'
+        required: false
+        default: 'ofoq-renders'
 
 permissions:
   contents: write
@@ -34,7 +38,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-      
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm install
@@ -73,7 +77,7 @@ jobs:
             --output "./output/${{ inputs.job_id }}.mp4" \
             --job-id "${{ inputs.job_id }}" \
             --scene-name "${{ inputs.scene_name }}" \
-            --release-tag "ofoq-renders" \
+            --release-tag "${{ inputs.release_tag }}" \
             --timeout 1500
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
