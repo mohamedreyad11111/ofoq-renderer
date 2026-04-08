@@ -18,7 +18,7 @@ on:
         required: false
         default: 'render'
       release_tag:
-        description: 'GitHub Release tag to upload assets to (e.g. ofoq-renders, v1.0)'
+        description: 'GitHub Release tag to upload to (e.g. ofoq-renders or v2025-06)'
         required: false
         default: 'ofoq-renders'
 
@@ -38,12 +38,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm install
 
       # ── كاش المتصفح: نحفظ Chrome بعد أول تحميل ──────────────────────────
+
       - name: Get Playwright version (for cache key)
         id: pw-version
         run: echo "version=$(npx playwright --version | awk '{print $2}')" >> $GITHUB_OUTPUT
