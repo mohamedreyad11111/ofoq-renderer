@@ -146,8 +146,53 @@ async function firestoreUpdate(status, extraFields) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. GitHub Release upload
+// 5.5  Firestore GET — قراءة كود المشهد لملف الـ MD
 // ---------------------------------------------------------------------------
+async function firestoreGetSceneCode() {
+  if (!FB_SA_JSON || !FB_PROJECT || !JOB_ID) return null;
+  try {
+    var token   = await getFirebaseAccessToken(FB_SA_JSON);
+    var docPath = 'projects/' + FB_PROJECT + '/databases/(default)/documents/render_jobs/' + JOB_ID;
+    var resp    = await fetch('https://firestore.googleapis.com/v1/' + docPath, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!resp.ok) { log('Firestore GET failed: ' + resp.status, 'warn'); return null; }
+    var doc = await resp.json();
+    // code مخزّن في fields.code.stringValue
+    var code = doc.fields && doc.fields.code && doc.fields.code.stringValue;
+    return code || null;
+  } catch(e) {
+    log('Firestore GET error: ' + e.message, 'warn');
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 5.6  إنشاء محتوى ملف .md للمشهد
+// ---------------------------------------------------------------------------
+function buildSceneMarkdown(sceneCode, assetBaseName) {
+  var date     = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+  var repoLink = GH_REPO ? 'https://github.com/' + GH_REPO + '/releases/tag/' + RELEASE_TAG : '';
+  var lines    = [
+    '# Scene: ' + SCENE_NAME,
+    '',
+    '| Field | Value |',
+    '|-------|-------|',
+    '| **Job ID**    | `' + (JOB_ID || '—')     + '` |',
+    '| **Rendered**  | ' + date                   + '  |',
+    '| **File**      | `' + assetBaseName + '.mp4` |',
+    repoLink ? '| **Release**   | [' + RELEASE_TAG + '](' + repoLink + ') |' : '',
+    '',
+    '## Scene Code',
+    '',
+    '```javascript',
+    sceneCode,
+    '```',
+  ].filter(function(l) { return l !== null && l !== undefined; });
+  return lines.join('\n');
+}
+
+
 async function uploadToGitHubRelease(filePath, assetName) {
   if (!GH_TOKEN || !GH_REPO) {
     log('GitHub upload skipped (no credentials)', 'warn');
@@ -210,7 +255,48 @@ async function uploadToGitHubRelease(filePath, assetName) {
   if (!upResp.ok) throw new Error('Upload failed (' + upResp.status + '): ' + (await upResp.text()).slice(0, 200));
   var asset = await upResp.json();
   log('Uploaded: ' + asset.browser_download_url, 'ok');
-  return { downloadUrl: asset.browser_download_url, releaseUrl: releaseUrl };
+  return { downloadUrl: asset.browser_download_url, releaseUrl: releaseUrl, releaseId: releaseId };
+}
+
+// ---------------------------------------------------------------------------
+// 5.1  رفع asset إضافي على release موجودة (للـ MD sidecar)
+// ---------------------------------------------------------------------------
+async function uploadAssetToRelease(releaseId, content, assetName, contentType) {
+  if (!GH_TOKEN || !GH_REPO || !releaseId) return null;
+  var headers  = {
+    'Authorization': 'Bearer ' + GH_TOKEN,
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28'
+  };
+  var apiBase  = 'https://api.github.com/repos/' + GH_REPO;
+  var buf      = Buffer.from(content, 'utf8');
+  var uploadUrl = 'https://uploads.github.com/repos/' + GH_REPO
+    + '/releases/' + releaseId + '/assets?name=' + encodeURIComponent(assetName);
+
+  // حذف asset موجود بنفس الاسم
+  var lr = await fetch(apiBase + '/releases/' + releaseId + '/assets', { headers: headers });
+  if (lr.ok) {
+    var assets = await lr.json();
+    var ex = assets.find(function(a) { return a.name === assetName; });
+    if (ex) {
+      await fetch(apiBase + '/releases/assets/' + ex.id, { method: 'DELETE', headers: headers });
+      log('Replaced existing asset: ' + assetName, 'info');
+    }
+  }
+
+  var upResp = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': contentType || 'text/markdown', 'Content-Length': String(buf.length) }, headers),
+    body: buf
+  });
+  if (!upResp.ok) {
+    var errTxt = await upResp.text();
+    log('MD upload failed (' + upResp.status + '): ' + errTxt.slice(0, 120), 'warn');
+    return null;
+  }
+  var asset = await upResp.json();
+  log('MD sidecar uploaded: ' + asset.browser_download_url, 'ok');
+  return asset.browser_download_url;
 }
 
 // ---------------------------------------------------------------------------
@@ -547,15 +633,35 @@ async function main() {
   // Upload to GitHub Release
   var downloadUrl = null;
   var releaseUrl  = null;
+  var releaseId   = null;
   if (GH_TOKEN && GH_REPO) {
     try {
       var uploadResult = await uploadToGitHubRelease(finalPath, assetName);
       if (uploadResult) {
         downloadUrl = uploadResult.downloadUrl;
         releaseUrl  = uploadResult.releaseUrl;
+        releaseId   = uploadResult.releaseId;
       }
     } catch(e) {
       log('GitHub upload error: ' + e.message, 'err');
+    }
+  }
+
+  // ── MD Sidecar: رفع ملف .md بجانب الـ MP4 ──────────────────────────────
+  if (releaseId && GH_TOKEN && GH_REPO) {
+    try {
+      log('Phase 4: Uploading scene .md sidecar...', 'info');
+      var sceneCode = await firestoreGetSceneCode();
+      if (sceneCode) {
+        var baseName  = path.basename(assetName, '.' + (renderInfo.ext || 'mp4'));
+        var mdName    = baseName + '.md';
+        var mdContent = buildSceneMarkdown(sceneCode, baseName);
+        await uploadAssetToRelease(releaseId, mdContent, mdName, 'text/markdown');
+      } else {
+        log('Scene code not found in Firestore — MD sidecar skipped', 'warn');
+      }
+    } catch(e) {
+      log('MD sidecar error: ' + e.message, 'warn');
     }
   }
 
